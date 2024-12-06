@@ -422,11 +422,13 @@ private: // Functions
                 && ((MemoryProperties.memoryTypes[i].propertyFlags & Flags) == Flags)
                 && (MemoryProperties.memoryTypes[i].heapIndex == HeapIndex))
             {
-                VkMemoryAllocateInfo AllocationInfo;
-                AllocationInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-                AllocationInfo.pNext = nullptr;
-                AllocationInfo.allocationSize = rMemoryRequirements.size;
-                AllocationInfo.memoryTypeIndex = i;
+                VkMemoryAllocateInfo AllocationInfo =
+                {
+                    .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+                    .pNext = nullptr,
+                    .allocationSize = rMemoryRequirements.size,
+                    .memoryTypeIndex = i
+                };
 
                 Assert(vkAllocateMemory(Device, &AllocationInfo, nullptr, &rMemory) == VK_SUCCESS, "Failed to allocate vertex buffer memory");
                 break;
