@@ -263,11 +263,11 @@ private: // Functions
 
         for (uint32_t i = 0; i < DeviceHandles.size(); i++)
         {
-            VkPhysicalDeviceFeatures DeviceFeatures{};
-            VkPhysicalDeviceProperties DeviceProperties{};
-            VkPhysicalDeviceMemoryProperties MemoryProperties{};
+            VkPhysicalDeviceFeatures DeviceFeatures {};
+            VkPhysicalDeviceProperties DeviceProperties {};
+            VkPhysicalDeviceMemoryProperties MemoryProperties {};
 
-            PhysicalDeviceInfo DeviceInfo{ DeviceHandles[i], i, 0, UINT32_MAX, 0, 0 };
+            PhysicalDeviceInfo DeviceInfo { DeviceHandles[i], i, 0, UINT32_MAX, 0, 0 };
 
             vkGetPhysicalDeviceFeatures(DeviceHandles[i], &DeviceFeatures);
             vkGetPhysicalDeviceProperties(DeviceHandles[i], &DeviceProperties);
