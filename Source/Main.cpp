@@ -1320,5 +1320,5 @@ int main(int argc, char* argv[])
     HelloTriangle App;
     App.Run();
 
-	return 0;
+    return 0;
 }
