@@ -307,8 +307,9 @@ private: // Functions
         Assert(PhysicalDevices.size() > 0, "Could not find a supported GPU");
 
 #define COMPARE(a, b) { if ((a) > (b)) { return true; } else if ((a) < (b)) { return false; } }
-        std::sort(PhysicalDevices.begin(), PhysicalDevices.end(), [](const PhysicalDeviceInfo& lhs,
-            const PhysicalDeviceInfo& rhs) -> bool {
+        std::sort(PhysicalDevices.begin(), PhysicalDevices.end(),
+            [](const PhysicalDeviceInfo& lhs, const PhysicalDeviceInfo& rhs) -> bool
+            {
                 COMPARE(lhs.PreferenceIndex, rhs.PreferenceIndex);
                 COMPARE(lhs.NumGraphicsQueues, rhs.NumGraphicsQueues);
                 COMPARE(lhs.LocalHeapSize, rhs.LocalHeapSize);
