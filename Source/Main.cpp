@@ -315,7 +315,7 @@ private: // Functions
                 return false;
             }
         );
-#undef CMP
+#undef COMPARE
 
         PhysicalDevice = PhysicalDevices[0].Handle;
         GraphicsQueueGroup = PhysicalDevices[0].GraphicsQueueGroup;
