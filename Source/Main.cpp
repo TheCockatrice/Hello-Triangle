@@ -15,6 +15,10 @@
 #include "VertexShader.vert.h"
 #include "FragmentShader.frag.h"
 
+
+#define CRASH_UNDER_ARC 1
+
+
 enum
 {
     KB = 1024,
@@ -75,6 +79,7 @@ private: // Variables
     };
 
     bool                                Running { true };
+    bool                                Paused = false;
 
     SDL_Window*                         Window { nullptr };
 
@@ -84,6 +89,7 @@ private: // Variables
     VkDevice                            Device { nullptr };
 
     VkQueue                             GraphicsQueue { nullptr };
+    VkQueue                             PresentQueue = nullptr;
     VkCommandPool                       CommandPool { nullptr };
     VkCommandBuffer                     CommandBuffer { nullptr };
     VkFence                             Fence { nullptr };
@@ -100,6 +106,7 @@ private: // Variables
     void*                               UploadBufferCpuVA { nullptr };
     
     uint32_t                            GraphicsQueueGroup { UINT32_MAX };
+    uint32_t                            PresentQueueGroup = UINT32_MAX;
 
     VkSurfaceKHR                        Surface { nullptr };
     VkSurfaceFormatKHR                  SurfaceFormat { VK_FORMAT_UNDEFINED };
@@ -146,7 +153,7 @@ private: // Functions
         Assert(SDL_Init(SDL_INIT_EVERYTHING) == 0, "Could not initialize SDL");
         Assert(SDL_Vulkan_LoadLibrary(nullptr) == 0, "Could not load the vulkan library");
 
-        Window = SDL_CreateWindow(APP_NAME, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, WIDTH, HEIGHT, SDL_WINDOW_VULKAN | SDL_WINDOW_SHOWN);
+        Window = SDL_CreateWindow(APP_NAME, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, WIDTH, HEIGHT, SDL_WINDOW_VULKAN | SDL_WINDOW_SHOWN  | SDL_WINDOW_FULLSCREEN);
         Assert(Window != nullptr, "Could not create SDL window");
     }
 
@@ -246,7 +253,7 @@ private: // Functions
             VkPhysicalDevice Handle;
             uint32_t         OriginalIndex;
             uint32_t         PreferenceIndex;
-            uint32_t         GraphicsQueueGroup;
+            uint32_t         GraphicsQueueGroup, PresentQueueGroup;
             uint32_t         NumGraphicsQueues;
             uint64_t         LocalHeapSize;
         };
@@ -284,6 +291,9 @@ private: // Functions
                 DeviceInfo.PreferenceIndex = it->second;
             }
 
+            DeviceInfo.PresentQueueGroup = UINT32_MAX;
+            DeviceInfo.GraphicsQueueGroup = UINT32_MAX;
+
             for (uint32_t j = 0; j < QueueGroups.size(); j++)
             {
                 if (QueueGroups[j].queueFlags & VK_QUEUE_GRAPHICS_BIT)
@@ -291,6 +301,10 @@ private: // Functions
                     DeviceInfo.GraphicsQueueGroup = std::min(DeviceInfo.GraphicsQueueGroup, j); // Pick the first (minimum) available group, we only use 1 gfx queue, so the group does not matter
                     DeviceInfo.NumGraphicsQueues += QueueGroups[j].queueCount;
                 }
+            }
+
+            if (CRASH_UNDER_ARC && DeviceInfo.GraphicsQueueGroup == 0) {
+                DeviceInfo.PresentQueueGroup = 1;
             }
 
             for (uint32_t j = 0; j < MemoryProperties.memoryHeapCount; j++)
@@ -320,6 +334,11 @@ private: // Functions
 
         PhysicalDevice = PhysicalDevices[0].Handle;
         GraphicsQueueGroup = PhysicalDevices[0].GraphicsQueueGroup;
+        PresentQueueGroup = CRASH_UNDER_ARC ? PhysicalDevices[0].PresentQueueGroup : GraphicsQueueGroup;
+
+        if(CRASH_UNDER_ARC) {
+            Assert(PhysicalDevices[0].PresentQueueGroup != UINT32_MAX, "Couldn't setup test scenario. The selected device must have a present queue available that is not the selected graphics queue!");
+        }
     }
 
     void CreateVulkanDevice(void)
@@ -352,6 +371,9 @@ private: // Functions
 
         const float QueuePriority = 1.0f;
 
+        std::vector<VkDeviceQueueCreateInfo> queueInfos;
+
+
         VkDeviceQueueCreateInfo QueueInfo =
         {
             .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
@@ -362,13 +384,29 @@ private: // Functions
             .pQueuePriorities = &QueuePriority
         };
 
+        queueInfos.push_back(QueueInfo);
+
+        if (CRASH_UNDER_ARC) {
+            VkDeviceQueueCreateInfo PresentQueueInfo =
+            {
+                .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+                .pNext = nullptr,
+                .flags = 0,
+                .queueFamilyIndex = PresentQueueGroup,
+                .queueCount = 1,
+                .pQueuePriorities = &QueuePriority
+            };
+            queueInfos.push_back(PresentQueueInfo);
+
+        }
+
         VkDeviceCreateInfo DeviceInfo =
         {
             .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
             .pNext = nullptr,
             .flags = 0,
-            .queueCreateInfoCount = 1,
-            .pQueueCreateInfos = &QueueInfo,
+            .queueCreateInfoCount = (uint32_t)queueInfos.size(),
+            .pQueueCreateInfos = queueInfos.data(),
             .enabledLayerCount = 0,
             .ppEnabledLayerNames = nullptr,
             .enabledExtensionCount = static_cast<uint32_t>(RequiredExtensions.size()),
@@ -383,6 +421,11 @@ private: // Functions
     {
         vkGetDeviceQueue(Device, GraphicsQueueGroup, 0, &GraphicsQueue);
         Assert(GraphicsQueue != nullptr, "Could not get gfx queue 0");
+
+        if (CRASH_UNDER_ARC) {
+            vkGetDeviceQueue(Device, PresentQueueGroup, 0, &PresentQueue);
+            Assert(PresentQueue != nullptr, "Could not get present queue 0");
+        }
 
         VkCommandPoolCreateInfo CommandPoolInfo =
         {
@@ -516,33 +559,68 @@ private: // Functions
         VkSurfaceCapabilitiesKHR SurfaceCapabilities = { 0 };
         Assert(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(PhysicalDevice, Surface, &SurfaceCapabilities) == VK_SUCCESS, "Could not get surface capabilities");
 
-        VkSwapchainCreateInfoKHR SwapchainInfo =
-        {
-            .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
-            .pNext = nullptr,
-            .flags = 0,
-            .surface = Surface,
-            .minImageCount = SurfaceCapabilities.minImageCount,
-            .imageFormat = SurfaceFormat.format,
-            .imageColorSpace = SurfaceFormat.colorSpace,
-            .imageExtent =
-            {
-                .width = SurfaceCapabilities.currentExtent.width,
-                .height = SurfaceCapabilities.currentExtent.height
-            },
-            .imageArrayLayers = 1,
-            .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
-            .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
-            .queueFamilyIndexCount = 0,
-            .pQueueFamilyIndices = nullptr,
-            .preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR,
-            .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
-            .presentMode = VK_PRESENT_MODE_FIFO_KHR,
-            .clipped = VK_TRUE,
-            .oldSwapchain = nullptr
-        };
+        uint32_t queueFamilyIndices[] = { GraphicsQueueGroup, PresentQueueGroup };
 
-        Assert(vkCreateSwapchainKHR(Device, &SwapchainInfo, nullptr, &Swapchain) == VK_SUCCESS, "Failed to create swapchain");
+        VkSwapchainCreateInfoKHR SwapchainInfo;
+        
+        if (CRASH_UNDER_ARC) {
+            SwapchainInfo =
+            {
+                .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
+                .pNext = nullptr,
+                .flags = 0,
+                .surface = Surface,
+                .minImageCount = SurfaceCapabilities.minImageCount,
+                .imageFormat = SurfaceFormat.format,
+                .imageColorSpace = SurfaceFormat.colorSpace,
+                .imageExtent =
+                {
+                    .width = SurfaceCapabilities.currentExtent.width,
+                    .height = SurfaceCapabilities.currentExtent.height
+                },
+                .imageArrayLayers = 1,
+                .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+                .imageSharingMode = VK_SHARING_MODE_CONCURRENT,
+                .queueFamilyIndexCount = 2,
+                .pQueueFamilyIndices = queueFamilyIndices,
+                .preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR,
+                .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+                .presentMode = VK_PRESENT_MODE_FIFO_KHR,
+                .clipped = VK_TRUE,
+                .oldSwapchain = nullptr
+            };
+        }
+        else {
+
+            SwapchainInfo =
+            {
+                .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
+                .pNext = nullptr,
+                .flags = 0,
+                .surface = Surface,
+                .minImageCount = SurfaceCapabilities.minImageCount,
+                .imageFormat = SurfaceFormat.format,
+                .imageColorSpace = SurfaceFormat.colorSpace,
+                .imageExtent =
+                {
+                    .width = SurfaceCapabilities.currentExtent.width,
+                    .height = SurfaceCapabilities.currentExtent.height
+                },
+                .imageArrayLayers = 1,
+                .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+                .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
+                .queueFamilyIndexCount = 0,
+                .pQueueFamilyIndices = nullptr,
+                .preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR,
+                .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+                .presentMode = VK_PRESENT_MODE_FIFO_KHR,
+                .clipped = VK_TRUE,
+                .oldSwapchain = nullptr
+            };
+        }
+
+        auto createRes = vkCreateSwapchainKHR(Device, &SwapchainInfo, nullptr, &Swapchain);
+        Assert(createRes == VK_SUCCESS, "Failed to create swapchain");
 
         Assert(vkGetSwapchainImagesKHR(Device, Swapchain, &NumSwapchainImages, nullptr) == VK_SUCCESS, "Could not get number of swapchain images");
         Assert((NumSwapchainImages >= MinSwapchainImages) && (NumSwapchainImages <= MaxSwapchainImages), "Invalid number of swapchain images");
@@ -1056,8 +1134,20 @@ private: // Functions
     void Render(void)
     {
         uint32_t SwapchainIndex = 0;
-        Assert(vkAcquireNextImageKHR(Device, Swapchain, UINT64_MAX, AcquireSemaphore, nullptr, &SwapchainIndex) == VK_SUCCESS, "Could not get next surface image");
+        auto res = vkAcquireNextImageKHR(Device, Swapchain, UINT64_MAX, AcquireSemaphore, nullptr, &SwapchainIndex);
 
+        if (res == VK_ERROR_OUT_OF_DATE_KHR) {
+            // Rebuild swapchain
+            CreateSwapchain();
+        }
+        else if (res == VK_SUBOPTIMAL_KHR) {
+            
+        }
+        else {
+            Assert(res == VK_SUCCESS, "Could not get next surface image");
+        }
+
+        
         // Color buffer clear color
         VkClearValue ClearColor;
         ClearColor.color.float32[0] = 0.00f;
@@ -1137,10 +1227,15 @@ private: // Functions
             .pResults = nullptr
         };
 
-        Assert(vkQueueSubmit(GraphicsQueue, 1, &SubmissionInfo, Fence) == VK_SUCCESS, "Failed to submit command buffer");
-        Assert(vkQueuePresentKHR(GraphicsQueue, &PresentInfo) == VK_SUCCESS, "Failed to present");
+        auto submitRes = vkQueueSubmit(GraphicsQueue, 1, &SubmissionInfo, Fence);
+        Assert(submitRes == VK_SUCCESS, "Failed to submit command buffer");
         
-        Assert(vkWaitForFences(Device, 1, &Fence, VK_TRUE, 1 * NANOSECONDS_PER_SECOND) == VK_SUCCESS, "Fence timeout");
+        auto presentRes = vkQueuePresentKHR(CRASH_UNDER_ARC ? PresentQueue : GraphicsQueue, &PresentInfo);
+        if(CRASH_UNDER_ARC) 
+            Assert(presentRes != VK_ERROR_DEVICE_LOST, "Lost device as expected.");
+        Assert(presentRes == VK_SUCCESS || presentRes == VK_SUBOPTIMAL_KHR, "Failed to present");
+        
+        Assert(vkWaitForFences(Device, 1, &Fence, VK_TRUE, 10 * NANOSECONDS_PER_SECOND) == VK_SUCCESS, "Fence timeout");
         Assert(vkResetFences(Device, 1, &Fence) == VK_SUCCESS, "Could not reset fence");
     }
 
@@ -1311,8 +1406,12 @@ public: // Functions
         while (Running)
         {
             Update();
-            Render();
+            if (!Paused) {
+                Render();
+            }
         }
+
+        printf("Finished running.");
     }
 };
 
